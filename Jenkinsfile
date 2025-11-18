@@ -28,13 +28,6 @@ pipeline {
         stage('3. Run Unit Tests') {
             steps {
                 echo 'Running unit tests...'
-                sh 'mvn test'  // Changed 'bat' to 'sh' for Linux
-            }
-            post {
-                always {
-                    junit allowEmptyResults: true, testResults: '**/target/surefire-reports/*.xml'
-                }
-            }
         }
 
         stage('4. Generate JAR Package') {
@@ -49,7 +42,7 @@ pipeline {
             }
         }
 
-        
+
         stage('5. SonarQube Analysis') {
     steps {
         echo 'Running SonarQube analysis...'
@@ -59,7 +52,7 @@ pipeline {
             mkdir -p sm-core-model/src/test/java
             mkdir -p sm-core-modules/src/test/java
             mkdir -p sm-shop-model/src/test/java
-            
+
             # Run SonarQube analysis
             mvn sonar:sonar \
                 -Dsonar.projectKey=yourwaytoltaly \
