@@ -70,8 +70,8 @@ class MailServiceTest {
         JHipsterProperties.Cache.Ehcache ehcacheProperties = mock(JHipsterProperties.Cache.Ehcache.class);
         when(jHipsterProperties.getCache()).thenReturn(cacheProperties);
         when(cacheProperties.getEhcache()).thenReturn(ehcacheProperties);
-        when(ehcacheProperties.getMaxEntries()).thenReturn(100);
-        when(ehcacheProperties.getTimeToLiveSeconds()).thenReturn(3600L);
+        when(ehcacheProperties.getMaxEntries()).thenReturn(100L);
+        when(ehcacheProperties.getTimeToLiveSeconds()).thenReturn(3600);
 
         when(messageSource.getMessage(anyString(), any(), any(Locale.class))).thenReturn("Test Subject");
         when(templateEngine.process(anyString(), any())).thenReturn("<html>Test Content</html>");

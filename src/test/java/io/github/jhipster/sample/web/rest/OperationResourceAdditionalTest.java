@@ -195,7 +195,10 @@ class OperationResourceAdditionalTest {
         try {
             restOperationMockMvc
                 .perform(post(ENTITY_API_URL).contentType(MediaType.APPLICATION_JSON).content(om.writeValueAsBytes(invalidOperation)))
-                .andExpect(status().isError()); // Accept any error status (4xx or 5xx)
+                .andExpect(result -> {
+                    int status = result.getResponse().getStatus();
+                    assertThat(status).isGreaterThanOrEqualTo(400); // Accept any error status (4xx or 5xx)
+                });
         } catch (Exception e) {
             // If an exception is thrown (e.g., during transaction rollback), that's acceptable
         }
