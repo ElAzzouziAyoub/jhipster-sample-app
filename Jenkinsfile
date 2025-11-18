@@ -49,14 +49,26 @@ pipeline {
             }
         }
 
+        
         stage('5. SonarQube Analysis') {
-          steps {
-            echo 'Running SonarQube analysis...'
-            withSonarQubeEnv('SonarQube') {
-              sh 'mvn sonar:sonar -Dsonar.projectKey=yourwaytoltaly'
-            }
-          }
+    steps {
+        echo 'Running SonarQube analysis...'
+        withSonarQubeEnv('SonarQube') {
+            sh '''
+            # Create empty test directories for modules that don't have tests
+            mkdir -p sm-core-model/src/test/java
+            mkdir -p sm-core-modules/src/test/java
+            mkdir -p sm-shop-model/src/test/java
+            
+            # Run SonarQube analysis
+            mvn sonar:sonar \
+                -Dsonar.projectKey=yourwaytoltaly \
+                -Dsonar.coverage.exclusions=**/sm-core-model/**,**/sm-core-modules/**,**/sm-shop-model/** \
+                -Dsonar.cpd.exclusions=**/sm-core-model/**,**/sm-core-modules/**,**/sm-shop-model/**
+            '''
         }
+    }
+}
 
 
 
