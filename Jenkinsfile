@@ -59,12 +59,7 @@ pipeline {
             }
         }
 
-        stage('Build Application') {
-            steps {
-                checkout scm
-                sh './mvnw clean package -Pprod -DskipTests'
-            }
-        }
+
 
         stage('5. SonarQube Analysis') {
             steps {
