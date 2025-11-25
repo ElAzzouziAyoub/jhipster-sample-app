@@ -1,1 +1,38 @@
 aaaaaaaaaaaaaaaaaaaaaa
+
+
+
+ sh """
+            # Stop old containers if exist
+            docker stop ${APP_NAME} || true
+            docker rm ${APP_NAME} || true
+            docker stop postgresql || true
+            docker rm postgresql || true
+
+            # Start PostgreSQL database
+            docker run -d --name postgresql \\
+              -e POSTGRES_DB=jhipsterSampleApplication \\
+              -e POSTGRES_USER=jhipsterSampleApplication \\
+              -e POSTGRES_PASSWORD=password \\
+              -p 5432:5432 \\
+              postgres:15
+
+            # Wait for PostgreSQL to be ready
+            echo "Waiting for PostgreSQL to be ready..."
+            sleep 15
+
+            # Run JHipster application with database connection
+            # Using port mapping instead of host network for better access control
+            docker run -d --name ${APP_NAME} \\
+              --link postgresql:postgresql \\
+              -p 8080:8080 \\
+              -e SPRING_DATASOURCE_URL=jdbc:postgresql://postgresql:5432/jhipsterSampleApplication \\
+              -e SPRING_DATASOURCE_USERNAME=jhipsterSampleApplication \\
+              -e SPRING_DATASOURCE_PASSWORD=password \\
+              ${APP_NAME}
+
+            echo "✅ Containers started!"
+            echo "Checking container status..."
+            docker ps | grep -E "${APP_NAME}|postgresql"
+            """
+
