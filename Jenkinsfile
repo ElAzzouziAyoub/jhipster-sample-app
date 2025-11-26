@@ -94,72 +94,76 @@ pipeline {
         }
 
         stage('Push to Docker Registry') {
-            steps {
-                echo "Pushing Docker image to Docker Hub..."
-                script {
-                    withCredentials([usernamePassword(
-                        credentialsId: 'docker-hub-credentials',
-                        usernameVariable: 'DOCKER_USER',
-                        passwordVariable: 'DOCKER_PASS'
-                    )]) {
-                        sh "docker login -u %DOCKER_USER% -p %DOCKER_PASS%"
-                        sh "docker tag ${DOCKER_IMAGE}:${DOCKER_TAG} ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${DOCKER_TAG}"
-                        sh "docker push ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${DOCKER_TAG}"
-                        sh "docker tag ${DOCKER_IMAGE}:${DOCKER_TAG} ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:latest"
-                        sh "docker push ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:latest"
-                    }
-                }
+    steps {
+        echo "Pushing Docker image to Docker Hub..."
+        script {
+            withCredentials([usernamePassword(
+                credentialsId: 'docker-hub-credentials',
+                usernameVariable: 'DOCKER_USER',
+                passwordVariable: 'DOCKER_PASS'
+            )]) {
+
+                sh """
+                    echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
+
+                    docker tag ${DOCKER_IMAGE}:${DOCKER_TAG} ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${DOCKER_TAG}
+                    docker push ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${DOCKER_TAG}
+
+                    docker tag ${DOCKER_IMAGE}:${DOCKER_TAG} ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:latest
+                    docker push ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:latest
+                """
             }
         }
+    }
+}
+
 
         stage('Deploy to Kubernetes') {
-                    steps {
-                        echo "Deploying to Kubernetes..."
+    steps {
+        echo "Deploying to Kubernetes..."
 
-                        // Appliquer le namespace
-                        sh "minikube kubectl -- apply -f k8s/namespace.yaml --validate=false"
+        sh "minikube kubectl -- apply -f k8s/namespace.yaml --validate=false"
+        sh "minikube kubectl -- apply -f k8s/mysql-init-configmap.yaml --validate=false"
+        sh "minikube kubectl -- apply -f k8s/mysql-pvc.yaml --validate=false"
 
-                        // Appliquer le ConfigMap avec les scripts d'initialisation
-                        sh "minikube kubectl -- apply -f k8s/mysql-init-configmap.yaml --validate=false"
+        sh "minikube kubectl -- apply -f k8s/mysql-deployment.yaml --validate=false"
+        sh "minikube kubectl -- apply -f k8s/mysql-service.yaml --validate=false"
 
-                        // Appliquer le PVC
-                        sh "minikube kubectl -- apply -f k8s/mysql-pvc.yaml --validate=false"
+        echo "Waiting for MySQL to be ready..."
+        sh "minikube kubectl -- wait --for=condition=ready pod -l app=mysql -n ${K8S_NAMESPACE} --timeout=180s"
 
-                        // Déployer MySQL
-                        sh "minikube kubectl -- apply -f k8s/mysql-deployment.yaml --validate=false"
-                        sh "minikube kubectl -- apply -f k8s/mysql-service.yaml --validate=false"
+        echo "Waiting for database initialization..."
+        sleep(time: 15, unit: 'SECONDS')
 
-                        // Attendre que MySQL soit prêt
-                        echo "Waiting for MySQL to be ready..."
-                        sh "minikube kubectl -- wait --for=condition=ready pod -l app=mysql -n ${K8S_NAMESPACE} --timeout=180s"
+        sh "minikube kubectl -- apply -f k8s/app-deployment.yaml --validate=false"
+        sh "minikube kubectl -- apply -f k8s/app-service.yaml --validate=false"
 
-                        // Attendre l'initialisation
-                        echo "Waiting for database initialization..."
-                        sleep(time: 15, unit: 'SECONDS')
+        // FIXED container image update (Linux syntax + correct name)
+        sh """
+            minikube kubectl -- set image \
+                deployment/${K8S_DEPLOYMENT_NAME} \
+                jhipster-app=${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${DOCKER_TAG} \
+                -n ${K8S_NAMESPACE}
+        """
 
+        sh "minikube kubectl -- rollout status deployment/${K8S_DEPLOYMENT_NAME} -n ${K8S_NAMESPACE} --timeout=180s"
+    }
+}
 
-                        // Déployer l'application
-                        sh "minikube kubectl -- apply -f k8s/app-deployment.yaml --validate=false"
-                        sh "minikube kubectl -- apply -f k8s/app-service.yaml --validate=false"
-
-                        // Mettre à jour l'image
-                        sh "minikube kubectl -- set image deployment/${K8S_DEPLOYMENT_NAME} online-library=${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${DOCKER_TAG} -n ${K8S_NAMESPACE}"
-                        sh "minikube kubectl -- rollout status deployment/${K8S_DEPLOYMENT_NAME} -n ${K8S_NAMESPACE} --timeout=180s"
-                    }
-                }
 
                 stage('Verify Deployment') {
-                    steps {
-                        echo "Verifying Kubernetes deployment..."
-                        sh "minikube kubectl -- get pods -n ${K8S_NAMESPACE}"
-                        sh "minikube kubectl -- get services -n ${K8S_NAMESPACE}"
-                        sh "minikube kubectl -- get pvc -n ${K8S_NAMESPACE}"
-                        echo "=========================================="
-                        echo "APPLICATION URL:"
-                        echo "Run: minikube service online-library-service -n online-library --url"
-                        echo "=========================================="
-                    }
-                }
+    steps {
+        echo "Verifying Kubernetes deployment..."
+        sh "minikube kubectl -- get pods -n ${K8S_NAMESPACE}"
+        sh "minikube kubectl -- get services -n ${K8S_NAMESPACE}"
+        sh "minikube kubectl -- get pvc -n ${K8S_NAMESPACE}"
+        echo "=========================================="
+        echo "APPLICATION URL:"
+        echo "Run: minikube service jhipster-app-service -n jhipster-app --url"
+        echo "=========================================="
+    }
+}
+
 
 
       }
