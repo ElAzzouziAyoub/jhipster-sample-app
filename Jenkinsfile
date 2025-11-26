@@ -88,8 +88,8 @@ pipeline {
         stage('Build Docker Image') {
             steps {
                 echo "Building Docker image..."
-                bat "docker build -t ${DOCKER_IMAGE}:${DOCKER_TAG} ."
-                bat "docker tag ${DOCKER_IMAGE}:${DOCKER_TAG} ${DOCKER_IMAGE}:latest"
+                sh "docker build -t ${DOCKER_IMAGE}:${DOCKER_TAG} ."
+                sh "docker tag ${DOCKER_IMAGE}:${DOCKER_TAG} ${DOCKER_IMAGE}:latest"
             }
         }
 
@@ -102,11 +102,11 @@ pipeline {
                         usernameVariable: 'DOCKER_USER',
                         passwordVariable: 'DOCKER_PASS'
                     )]) {
-                        bat "docker login -u %DOCKER_USER% -p %DOCKER_PASS%"
-                        bat "docker tag ${DOCKER_IMAGE}:${DOCKER_TAG} ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${DOCKER_TAG}"
-                        bat "docker push ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${DOCKER_TAG}"
-                        bat "docker tag ${DOCKER_IMAGE}:${DOCKER_TAG} ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:latest"
-                        bat "docker push ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:latest"
+                        sh "docker login -u %DOCKER_USER% -p %DOCKER_PASS%"
+                        sh "docker tag ${DOCKER_IMAGE}:${DOCKER_TAG} ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${DOCKER_TAG}"
+                        sh "docker push ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${DOCKER_TAG}"
+                        sh "docker tag ${DOCKER_IMAGE}:${DOCKER_TAG} ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:latest"
+                        sh "docker push ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:latest"
                     }
                 }
             }
@@ -117,21 +117,21 @@ pipeline {
                         echo "Deploying to Kubernetes..."
 
                         // Appliquer le namespace
-                        bat "minikube kubectl -- apply -f k8s/namespace.yaml --validate=false"
+                        sh "minikube kubectl -- apply -f k8s/namespace.yaml --validate=false"
 
                         // Appliquer le ConfigMap avec les scripts d'initialisation
-                        bat "minikube kubectl -- apply -f k8s/mysql-init-configmap.yaml --validate=false"
+                        sh "minikube kubectl -- apply -f k8s/mysql-init-configmap.yaml --validate=false"
 
                         // Appliquer le PVC
-                        bat "minikube kubectl -- apply -f k8s/mysql-pvc.yaml --validate=false"
+                        sh "minikube kubectl -- apply -f k8s/mysql-pvc.yaml --validate=false"
 
                         // Déployer MySQL
-                        bat "minikube kubectl -- apply -f k8s/mysql-deployment.yaml --validate=false"
-                        bat "minikube kubectl -- apply -f k8s/mysql-service.yaml --validate=false"
+                        sh "minikube kubectl -- apply -f k8s/mysql-deployment.yaml --validate=false"
+                        sh "minikube kubectl -- apply -f k8s/mysql-service.yaml --validate=false"
 
                         // Attendre que MySQL soit prêt
                         echo "Waiting for MySQL to be ready..."
-                        bat "minikube kubectl -- wait --for=condition=ready pod -l app=mysql -n ${K8S_NAMESPACE} --timeout=180s"
+                        sh "minikube kubectl -- wait --for=condition=ready pod -l app=mysql -n ${K8S_NAMESPACE} --timeout=180s"
 
                         // Attendre l'initialisation
                         echo "Waiting for database initialization..."
@@ -139,21 +139,21 @@ pipeline {
 
 
                         // Déployer l'application
-                        bat "minikube kubectl -- apply -f k8s/app-deployment.yaml --validate=false"
-                        bat "minikube kubectl -- apply -f k8s/app-service.yaml --validate=false"
+                        sh "minikube kubectl -- apply -f k8s/app-deployment.yaml --validate=false"
+                        sh "minikube kubectl -- apply -f k8s/app-service.yaml --validate=false"
 
                         // Mettre à jour l'image
-                        bat "minikube kubectl -- set image deployment/${K8S_DEPLOYMENT_NAME} online-library=${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${DOCKER_TAG} -n ${K8S_NAMESPACE}"
-                        bat "minikube kubectl -- rollout status deployment/${K8S_DEPLOYMENT_NAME} -n ${K8S_NAMESPACE} --timeout=180s"
+                        sh "minikube kubectl -- set image deployment/${K8S_DEPLOYMENT_NAME} online-library=${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${DOCKER_TAG} -n ${K8S_NAMESPACE}"
+                        sh "minikube kubectl -- rollout status deployment/${K8S_DEPLOYMENT_NAME} -n ${K8S_NAMESPACE} --timeout=180s"
                     }
                 }
 
                 stage('Verify Deployment') {
                     steps {
                         echo "Verifying Kubernetes deployment..."
-                        bat "minikube kubectl -- get pods -n ${K8S_NAMESPACE}"
-                        bat "minikube kubectl -- get services -n ${K8S_NAMESPACE}"
-                        bat "minikube kubectl -- get pvc -n ${K8S_NAMESPACE}"
+                        sh "minikube kubectl -- get pods -n ${K8S_NAMESPACE}"
+                        sh "minikube kubectl -- get services -n ${K8S_NAMESPACE}"
+                        sh "minikube kubectl -- get pvc -n ${K8S_NAMESPACE}"
                         echo "=========================================="
                         echo "APPLICATION URL:"
                         echo "Run: minikube service online-library-service -n online-library --url"
