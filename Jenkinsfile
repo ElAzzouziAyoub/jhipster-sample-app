@@ -90,79 +90,88 @@ pipeline {
                 echo "Building Docker image..."
                 sh "docker build -t ${DOCKER_IMAGE}:${DOCKER_TAG} ."
                 sh "docker tag ${DOCKER_IMAGE}:${DOCKER_TAG} ${DOCKER_IMAGE}:latest"
+                
+                // Load image into minikube's Docker daemon
+                echo "Loading image into minikube..."
+                sh "minikube image load ${DOCKER_IMAGE}:${DOCKER_TAG}"
+                sh "minikube image load ${DOCKER_IMAGE}:latest"
             }
         }
 
         stage('Push to Docker Registry') {
-    steps {
-        echo "Pushing Docker image to Docker Hub..."
-        script {
-            withCredentials([usernamePassword(
-                credentialsId: 'docker-hub-credentials',
-                usernameVariable: 'DOCKER_USER',
-                passwordVariable: 'DOCKER_PASS'
-            )]) {
+            steps {
+                echo "Pushing Docker image to Docker Hub..."
+                script {
+                    withCredentials([usernamePassword(
+                        credentialsId: 'docker-hub-credentials',
+                        usernameVariable: 'DOCKER_USER',
+                        passwordVariable: 'DOCKER_PASS'
+                    )]) {
+                        sh """
+                            echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
 
-                sh """
-                    echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
+                            docker tag ${DOCKER_IMAGE}:${DOCKER_TAG} ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${DOCKER_TAG}
+                            docker push ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${DOCKER_TAG}
 
-                    docker tag ${DOCKER_IMAGE}:${DOCKER_TAG} ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${DOCKER_TAG}
-                    docker push ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${DOCKER_TAG}
-
-                    docker tag ${DOCKER_IMAGE}:${DOCKER_TAG} ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:latest
-                    docker push ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:latest
-                """
+                            docker tag ${DOCKER_IMAGE}:${DOCKER_TAG} ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:latest
+                            docker push ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:latest
+                        """
+                        
+                        // Load the registry-tagged image into minikube so it can use it
+                        echo "Loading registry image into minikube..."
+                        sh "minikube image load ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${DOCKER_TAG} || true"
+                        sh "minikube image load ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:latest || true"
+                    }
+                }
             }
         }
-    }
-}
 
 
         stage('Deploy to Kubernetes') {
-    steps {
-        echo "Deploying to Kubernetes..."
+            steps {
+                echo "Deploying to Kubernetes..."
 
-        sh "minikube kubectl -- apply -f k8s/namespace.yaml --validate=false"
-        sh "minikube kubectl -- apply -f k8s/mysql-init-configmap.yaml --validate=false"
-        sh "minikube kubectl -- apply -f k8s/mysql-pvc.yaml --validate=false"
+                // Deploy PostgreSQL and app (if not already deployed)
+                sh "minikube kubectl -- apply -f kubernetes/deployment.yaml --validate=false"
 
-        sh "minikube kubectl -- apply -f k8s/mysql-deployment.yaml --validate=false"
-        sh "minikube kubectl -- apply -f k8s/mysql-service.yaml --validate=false"
+                // Wait for PostgreSQL to be ready
+                echo "Waiting for PostgreSQL to be ready..."
+                sh "minikube kubectl -- wait --for=condition=ready pod -l app=postgresql --timeout=180s || true"
 
-        echo "Waiting for MySQL to be ready..."
-        sh "minikube kubectl -- wait --for=condition=ready pod -l app=mysql -n ${K8S_NAMESPACE} --timeout=180s"
+                // Wait for database initialization
+                echo "Waiting for database initialization..."
+                sleep(time: 15, unit: 'SECONDS')
 
-        echo "Waiting for database initialization..."
-        sleep(time: 15, unit: 'SECONDS')
+                // Update the app deployment with the new image
+                echo "Updating deployment with new image: ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${DOCKER_TAG}"
+                sh """
+                    minikube kubectl -- set image \
+                        deployment/${K8S_DEPLOYMENT_NAME} \
+                        ${K8S_DEPLOYMENT_NAME}=${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${DOCKER_TAG}
+                """
 
-        sh "minikube kubectl -- apply -f k8s/app-deployment.yaml --validate=false"
-        sh "minikube kubectl -- apply -f k8s/app-service.yaml --validate=false"
+                // Force a rollout restart to ensure new pods are created with the new image
+                echo "Restarting deployment to ensure new image is used..."
+                sh "minikube kubectl -- rollout restart deployment/${K8S_DEPLOYMENT_NAME}"
 
-        // FIXED container image update (Linux syntax + correct name)
-        sh """
-            minikube kubectl -- set image \
-                deployment/${K8S_DEPLOYMENT_NAME} \
-                jhipster-app=${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${DOCKER_TAG} \
-                -n ${K8S_NAMESPACE}
-        """
-
-        sh "minikube kubectl -- rollout status deployment/${K8S_DEPLOYMENT_NAME} -n ${K8S_NAMESPACE} --timeout=180s"
-    }
-}
+                // Wait for rollout to complete
+                sh "minikube kubectl -- rollout status deployment/${K8S_DEPLOYMENT_NAME} --timeout=180s"
+            }
+        }
 
 
-                stage('Verify Deployment') {
-    steps {
-        echo "Verifying Kubernetes deployment..."
-        sh "minikube kubectl -- get pods -n ${K8S_NAMESPACE}"
-        sh "minikube kubectl -- get services -n ${K8S_NAMESPACE}"
-        sh "minikube kubectl -- get pvc -n ${K8S_NAMESPACE}"
-        echo "=========================================="
-        echo "APPLICATION URL:"
-        echo "Run: minikube service jhipster-app-service -n jhipster-app --url"
-        echo "=========================================="
-    }
-}
+        stage('Verify Deployment') {
+            steps {
+                echo "Verifying Kubernetes deployment..."
+                sh "minikube kubectl -- get pods"
+                sh "minikube kubectl -- get services"
+                sh "minikube kubectl -- get deployments"
+                echo "=========================================="
+                echo "APPLICATION URL:"
+                echo "Run: minikube service ${K8S_SERVICE_NAME} --url"
+                echo "=========================================="
+            }
+        }
 
 
 
