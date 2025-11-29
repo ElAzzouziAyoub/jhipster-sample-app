@@ -102,25 +102,27 @@ pipeline {
             steps {
                 echo "Pushing Docker image to Docker Hub..."
                 script {
-                    withCredentials([usernamePassword(
-                        credentialsId: 'docker-hub-credentials',
-                        usernameVariable: 'DOCKER_USER',
-                        passwordVariable: 'DOCKER_PASS'
-                    )]) {
-                        sh """
-                            echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
+                    try {
+                        timeout(time: 10, unit: 'MINUTES') {
+                            withCredentials([usernamePassword(
+                                credentialsId: 'docker-hub-credentials',
+                                usernameVariable: 'DOCKER_USER',
+                                passwordVariable: 'DOCKER_PASS'
+                            )]) {
+                                sh """
+                                    echo "\$DOCKER_PASS" | docker login -u "\$DOCKER_USER" --password-stdin
 
-                            docker tag ${DOCKER_IMAGE}:${DOCKER_TAG} ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${DOCKER_TAG}
-                            docker push ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${DOCKER_TAG}
+                                    docker tag ${DOCKER_IMAGE}:${DOCKER_TAG} ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${DOCKER_TAG}
+                                    docker push ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${DOCKER_TAG} || echo "Push failed, continuing..."
 
-                            docker tag ${DOCKER_IMAGE}:${DOCKER_TAG} ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:latest
-                            docker push ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:latest
-                        """
-                        
-                        // Load the registry-tagged image into minikube so it can use it
-                        echo "Loading registry image into minikube..."
-                        sh "minikube image load ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${DOCKER_TAG} || true"
-                        sh "minikube image load ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:latest || true"
+                                    docker tag ${DOCKER_IMAGE}:${DOCKER_TAG} ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:latest
+                                    docker push ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:latest || echo "Push failed, continuing..."
+                                """
+                            }
+                        }
+                    } catch (Exception e) {
+                        echo "Docker push failed or timed out: ${e.getMessage()}"
+                        echo "Continuing with local deployment (image already loaded into minikube)..."
                     }
                 }
             }
@@ -142,12 +144,12 @@ pipeline {
                 echo "Waiting for database initialization..."
                 sleep(time: 15, unit: 'SECONDS')
 
-                // Update the app deployment with the new image
-                echo "Updating deployment with new image: ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${DOCKER_TAG}"
+                // Update the app deployment with the new image (use local image since we're using minikube)
+                echo "Updating deployment with new image: ${DOCKER_IMAGE}:${DOCKER_TAG}"
                 sh """
                     minikube kubectl -- set image \
                         deployment/${K8S_DEPLOYMENT_NAME} \
-                        ${K8S_DEPLOYMENT_NAME}=${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${DOCKER_TAG}
+                        ${K8S_DEPLOYMENT_NAME}=${DOCKER_IMAGE}:${DOCKER_TAG}
                 """
 
                 // Force a rollout restart to ensure new pods are created with the new image

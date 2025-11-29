@@ -63,8 +63,8 @@ spec:
     spec:
       containers:
         - name: jhipster-app
-          image: elazzayoub/jhipster-app:latest
-          imagePullPolicy: IfNotPresent
+          image: jhipster-app:latest
+          imagePullPolicy: Never
           ports:
             - containerPort: 8080
           env:
