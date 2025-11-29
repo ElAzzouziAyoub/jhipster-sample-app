@@ -141,20 +141,41 @@ pipeline {
                             returnStdout: true
                         ).trim()
                         
-                        if (!statusOutput.contains('Running') || statusOutput.contains('Stopped')) {
-                            echo "Minikube is not running. Starting minikube..."
-                            sh "minikube start --driver=docker || minikube start"
+                        if (!statusOutput.contains('Running')) {
+                            echo "Minikube is not running. Cleaning up and starting fresh..."
+                            
+                            // Try to stop and delete existing cluster to avoid SSH issues
+                            sh "minikube stop || true"
+                            sh "minikube delete || true"
+                            
+                            echo "Starting minikube with docker driver..."
+                            // Start with docker driver and force recreation
+                            sh "minikube start --driver=docker --force"
+                            
                             echo "Waiting for minikube to be ready..."
-                            sleep(time: 10, unit: 'SECONDS')
-                            sh "minikube status"
+                            sleep(time: 15, unit: 'SECONDS')
+                            
+                            // Verify it's running
+                            def finalStatus = sh(
+                                script: 'minikube status 2>&1',
+                                returnStdout: true
+                            ).trim()
+                            
+                            if (!finalStatus.contains('Running')) {
+                                error("Minikube failed to start properly")
+                            }
+                            
+                            echo "Minikube is now running."
                         } else {
                             echo "Minikube is already running."
                         }
                     } catch (Exception e) {
-                        echo "Error checking minikube status: ${e.getMessage()}"
-                        echo "Attempting to start minikube..."
-                        sh "minikube start --driver=docker || minikube start"
-                        sleep(time: 10, unit: 'SECONDS')
+                        echo "Error with minikube: ${e.getMessage()}"
+                        echo "Attempting to clean up and restart..."
+                        sh "minikube stop || true"
+                        sh "minikube delete || true"
+                        sh "minikube start --driver=docker --force"
+                        sleep(time: 15, unit: 'SECONDS')
                     }
                     
                     // Configure kubectl to use minikube's kubeconfig
