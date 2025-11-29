@@ -133,12 +133,47 @@ pipeline {
             steps {
                 echo "Deploying to Kubernetes..."
 
+                // Check if minikube is running, start it if not
+                script {
+                    try {
+                        def statusOutput = sh(
+                            script: 'minikube status 2>&1',
+                            returnStdout: true
+                        ).trim()
+                        
+                        if (!statusOutput.contains('Running') || statusOutput.contains('Stopped')) {
+                            echo "Minikube is not running. Starting minikube..."
+                            sh "minikube start --driver=docker || minikube start"
+                            echo "Waiting for minikube to be ready..."
+                            sleep(time: 10, unit: 'SECONDS')
+                            sh "minikube status"
+                        } else {
+                            echo "Minikube is already running."
+                        }
+                    } catch (Exception e) {
+                        echo "Error checking minikube status: ${e.getMessage()}"
+                        echo "Attempting to start minikube..."
+                        sh "minikube start --driver=docker || minikube start"
+                        sleep(time: 10, unit: 'SECONDS')
+                    }
+                    
+                    // Configure kubectl to use minikube's kubeconfig
+                    sh "minikube update-context || true"
+                }
+
                 // Deploy PostgreSQL and app (if not already deployed)
-                sh "minikube kubectl -- apply -f kubernetes/deployment.yaml --validate=false"
+                // Use kubectl directly with minikube's kubeconfig to avoid certificate issues
+                sh """
+                    export KUBECONFIG=\$(minikube kubeconfig)
+                    kubectl apply -f kubernetes/deployment.yaml --validate=false
+                """
 
                 // Wait for PostgreSQL to be ready
                 echo "Waiting for PostgreSQL to be ready..."
-                sh "minikube kubectl -- wait --for=condition=ready pod -l app=postgresql --timeout=180s || true"
+                sh """
+                    export KUBECONFIG=\$(minikube kubeconfig)
+                    kubectl wait --for=condition=ready pod -l app=postgresql --timeout=180s || true
+                """
 
                 // Wait for database initialization
                 echo "Waiting for database initialization..."
@@ -147,17 +182,24 @@ pipeline {
                 // Update the app deployment with the new image (use local image since we're using minikube)
                 echo "Updating deployment with new image: ${DOCKER_IMAGE}:${DOCKER_TAG}"
                 sh """
-                    minikube kubectl -- set image \
+                    export KUBECONFIG=\$(minikube kubeconfig)
+                    kubectl set image \
                         deployment/${K8S_DEPLOYMENT_NAME} \
                         ${K8S_DEPLOYMENT_NAME}=${DOCKER_IMAGE}:${DOCKER_TAG}
                 """
 
                 // Force a rollout restart to ensure new pods are created with the new image
                 echo "Restarting deployment to ensure new image is used..."
-                sh "minikube kubectl -- rollout restart deployment/${K8S_DEPLOYMENT_NAME}"
+                sh """
+                    export KUBECONFIG=\$(minikube kubeconfig)
+                    kubectl rollout restart deployment/${K8S_DEPLOYMENT_NAME}
+                """
 
                 // Wait for rollout to complete
-                sh "minikube kubectl -- rollout status deployment/${K8S_DEPLOYMENT_NAME} --timeout=180s"
+                sh """
+                    export KUBECONFIG=\$(minikube kubeconfig)
+                    kubectl rollout status deployment/${K8S_DEPLOYMENT_NAME} --timeout=180s
+                """
             }
         }
 
@@ -165,9 +207,12 @@ pipeline {
         stage('Verify Deployment') {
             steps {
                 echo "Verifying Kubernetes deployment..."
-                sh "minikube kubectl -- get pods"
-                sh "minikube kubectl -- get services"
-                sh "minikube kubectl -- get deployments"
+                sh """
+                    export KUBECONFIG=\$(minikube kubeconfig)
+                    kubectl get pods
+                    kubectl get services
+                    kubectl get deployments
+                """
                 echo "=========================================="
                 echo "APPLICATION URL:"
                 echo "Run: minikube service ${K8S_SERVICE_NAME} --url"
