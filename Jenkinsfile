@@ -128,99 +128,9 @@ pipeline {
             }
         }
 
-        stage('Deploy to Kubernetes') {
-    steps {
-        echo "Deploying to Kubernetes..."
-
-        script {
-            // ... your existing minikube setup code ...
-
-            // Deploy PostgreSQL first
-            sh "kubectl apply -f kubernetes/deployment.yaml --validate=false"
-
-            // Wait for PostgreSQL
-            echo "Waiting for PostgreSQL to be ready..."
-            sh "kubectl wait --for=condition=ready pod -l app=postgresql --timeout=180s"
-
-            // Initialize database
-            echo "Initializing database..."
-            sh """
-                kubectl apply -f kubernetes/init-db.yaml || true
-                timeout 60 bash -c 'until kubectl get job init-database -o jsonpath="{.status.succeeded}" | grep -q 1; do sleep 2; done' || true
-            """
-
-            // Wait extra time for database to be fully ready
-            sleep(time: 10, unit: 'SECONDS')
-
-            // Deploy JHipster app with STRATEGY RECREATE
-            echo "Deploying JHipster application..."
-            sh """
-                # Update deployment strategy to Recreate
-                kubectl patch deployment jhipster-app -p '{"spec":{"strategy":{"type":"Recreate"}}}' || true
-
-                # Update image
-                kubectl set image deployment/jhipster-app jhipster-app=jhipster-app:latest
-
-                # Scale down to 0 then up to 1 to force recreation
-                kubectl scale deployment jhipster-app --replicas=0
-                sleep 5
-                kubectl scale deployment jhipster-app --replicas=1
-            """
-
-            // Monitor startup with better logging
-            echo "Monitoring application startup..."
-            sh """
-                # Wait for pod to be created
-                timeout 60 bash -c 'until kubectl get pods -l app=jhipster-app | grep -q Running; do sleep 2; echo "Waiting for pod..."; done' || true
-
-                # Get pod name
-                POD_NAME=\$(kubectl get pods -l app=jhipster-app -o jsonpath='{.items[0].metadata.name}')
-
-                # Stream logs for 120 seconds
-                timeout 120 kubectl logs \$POD_NAME -f || true
-
-                # Check final status
-                kubectl get pod \$POD_NAME
-            """
-
-            // Only if pod is running, check rollout status
-            def podStatus = sh(
-                script: "kubectl get pods -l app=jhipster-app -o jsonpath='{.items[0].status.phase}'",
-                returnStdout: true
-            ).trim()
-
-            if (podStatus == "Running") {
-                echo "Pod is running, checking health..."
-                sh "kubectl rollout status deployment/jhipster-app --timeout=60s"
-            } else {
-                echo "Pod status is: \${podStatus}"
-                echo "Checking logs for errors..."
-                sh """
-                    POD_NAME=\$(kubectl get pods -l app=jhipster-app -o jsonpath='{.items[0].metadata.name}')
-                    kubectl logs \$POD_NAME --tail=200
-                """
-                error("Application failed to start")
-            }
-        }
-    }
-}
 
 
 
-        stage('Verify Deployment') {
-            steps {
-                echo "Verifying Kubernetes deployment..."
-                sh """
-                    kubectl get pods
-                    kubectl get services
-                    kubectl get deployments
-                """
-                echo "=========================================="
-                echo "APPLICATION URL:"
-                echo "Run: minikube service ${K8S_SERVICE_NAME} --url"
-                echo "=========================================="
-            }
-        }
 
 
 
