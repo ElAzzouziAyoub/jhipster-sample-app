@@ -90,7 +90,7 @@ pipeline {
                 echo "Building Docker image..."
                 sh "docker build -t ${DOCKER_IMAGE}:${DOCKER_TAG} ."
                 sh "docker tag ${DOCKER_IMAGE}:${DOCKER_TAG} ${DOCKER_IMAGE}:latest"
-                
+
                 // Load image into minikube's Docker daemon
                 echo "Loading image into minikube..."
                 sh "minikube image load ${DOCKER_IMAGE}:${DOCKER_TAG}"
@@ -128,106 +128,83 @@ pipeline {
             }
         }
 
-
         stage('Deploy to Kubernetes') {
-            steps {
-                echo "Deploying to Kubernetes..."
+    steps {
+        echo "Deploying to Kubernetes..."
 
-                // Check if minikube is running, start it if not
-                script {
-                    try {
-                        def statusOutput = sh(
-                            script: 'minikube status 2>&1',
-                            returnStdout: true
-                        ).trim()
-                        
-                        if (!statusOutput.contains('Running')) {
-                            echo "Minikube is not running. Cleaning up and starting fresh..."
-                            
-                            // Try to stop and delete existing cluster to avoid SSH issues
-                            sh "minikube stop || true"
-                            sh "minikube delete || true"
-                            
-                            echo "Starting minikube with docker driver..."
-                            // Start with docker driver and force recreation
-                            sh "minikube start --driver=docker --force"
-                            
-                            echo "Waiting for minikube to be ready..."
-                            sleep(time: 15, unit: 'SECONDS')
-                            
-                            // Verify it's running
-                            def finalStatus = sh(
-                                script: 'minikube status 2>&1',
-                                returnStdout: true
-                            ).trim()
-                            
-                            if (!finalStatus.contains('Running')) {
-                                error("Minikube failed to start properly")
-                            }
-                            
-                            echo "Minikube is now running."
-                        } else {
-                            echo "Minikube is already running."
-                        }
-                    } catch (Exception e) {
-                        echo "Error with minikube: ${e.getMessage()}"
-                        echo "Attempting to clean up and restart..."
-                        sh "minikube stop || true"
-                        sh "minikube delete || true"
-                        sh "minikube start --driver=docker --force"
-                        sleep(time: 15, unit: 'SECONDS')
-                    }
-                    
-                    // Configure kubectl to use minikube's kubeconfig
-                    sh "minikube update-context || true"
-                    
-                    // Reload images into minikube after it starts (in case it was restarted)
-                    echo "Ensuring images are loaded into minikube..."
-                    sh "minikube image load ${DOCKER_IMAGE}:${DOCKER_TAG} || true"
-                    sh "minikube image load ${DOCKER_IMAGE}:latest || true"
-                }
+        script {
+            // ... your existing minikube setup code ...
 
-                // Deploy PostgreSQL and app (if not already deployed)
-                // minikube automatically configures kubectl, so we can use it directly
-                sh "kubectl apply -f kubernetes/deployment.yaml --validate=false"
+            // Deploy PostgreSQL first
+            sh "kubectl apply -f kubernetes/deployment.yaml --validate=false"
 
-                // Wait for PostgreSQL to be ready
-                echo "Waiting for PostgreSQL to be ready..."
-                sh "kubectl wait --for=condition=ready pod -l app=postgresql --timeout=180s || true"
+            // Wait for PostgreSQL
+            echo "Waiting for PostgreSQL to be ready..."
+            sh "kubectl wait --for=condition=ready pod -l app=postgresql --timeout=180s"
 
-                // Wait for database initialization
-                echo "Waiting for database initialization..."
-                sleep(time: 15, unit: 'SECONDS')
+            // Initialize database
+            echo "Initializing database..."
+            sh """
+                kubectl apply -f kubernetes/init-db.yaml || true
+                timeout 60 bash -c 'until kubectl get job init-database -o jsonpath="{.status.succeeded}" | grep -q 1; do sleep 2; done' || true
+            """
 
-                // Verify the image is loaded in minikube before updating deployment
-                echo "Verifying image is available in minikube..."
-                sh "minikube image ls | grep ${DOCKER_IMAGE} || echo 'Image not found in minikube'"
+            // Wait extra time for database to be fully ready
+            sleep(time: 10, unit: 'SECONDS')
 
-                // Update the app deployment with the new image (use local image since we're using minikube)
-                echo "Updating deployment with new image: ${DOCKER_IMAGE}:${DOCKER_TAG}"
+            // Deploy JHipster app with STRATEGY RECREATE
+            echo "Deploying JHipster application..."
+            sh """
+                # Update deployment strategy to Recreate
+                kubectl patch deployment jhipster-app -p '{"spec":{"strategy":{"type":"Recreate"}}}' || true
+
+                # Update image
+                kubectl set image deployment/jhipster-app jhipster-app=jhipster-app:latest
+
+                # Scale down to 0 then up to 1 to force recreation
+                kubectl scale deployment jhipster-app --replicas=0
+                sleep 5
+                kubectl scale deployment jhipster-app --replicas=1
+            """
+
+            // Monitor startup with better logging
+            echo "Monitoring application startup..."
+            sh """
+                # Wait for pod to be created
+                timeout 60 bash -c 'until kubectl get pods -l app=jhipster-app | grep -q Running; do sleep 2; echo "Waiting for pod..."; done' || true
+
+                # Get pod name
+                POD_NAME=\$(kubectl get pods -l app=jhipster-app -o jsonpath='{.items[0].metadata.name}')
+
+                # Stream logs for 120 seconds
+                timeout 120 kubectl logs \$POD_NAME -f || true
+
+                # Check final status
+                kubectl get pod \$POD_NAME
+            """
+
+            // Only if pod is running, check rollout status
+            def podStatus = sh(
+                script: "kubectl get pods -l app=jhipster-app -o jsonpath='{.items[0].status.phase}'",
+                returnStdout: true
+            ).trim()
+
+            if (podStatus == "Running") {
+                echo "Pod is running, checking health..."
+                sh "kubectl rollout status deployment/jhipster-app --timeout=60s"
+            } else {
+                echo "Pod status is: \${podStatus}"
+                echo "Checking logs for errors..."
                 sh """
-                    kubectl set image \
-                        deployment/${K8S_DEPLOYMENT_NAME} \
-                        ${K8S_DEPLOYMENT_NAME}=${DOCKER_IMAGE}:${DOCKER_TAG}
+                    POD_NAME=\$(kubectl get pods -l app=jhipster-app -o jsonpath='{.items[0].metadata.name}')
+                    kubectl logs \$POD_NAME --tail=200
                 """
-
-                // Force a rollout restart to ensure new pods are created with the new image
-                echo "Restarting deployment to ensure new image is used..."
-                sh "kubectl rollout restart deployment/${K8S_DEPLOYMENT_NAME}"
-
-                // Wait for rollout to complete with better error reporting
-                script {
-                    try {
-                        sh "kubectl rollout status deployment/${K8S_DEPLOYMENT_NAME} --timeout=180s"
-                    } catch (Exception e) {
-                        echo "Rollout timed out. Checking pod status..."
-                        sh "kubectl get pods -l app=${K8S_DEPLOYMENT_NAME}"
-                        sh "kubectl describe pods -l app=${K8S_DEPLOYMENT_NAME} | tail -50"
-                        throw e
-                    }
-                }
+                error("Application failed to start")
             }
         }
+    }
+}
+
 
 
         stage('Verify Deployment') {
