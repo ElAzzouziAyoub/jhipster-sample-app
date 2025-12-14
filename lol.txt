@@ -1,4 +1,4 @@
 docker run -d --name jhipster-app --link postgresql:postgresql -p 8080:8080 -e SPRING_DATASOURCE_URL=jdbc:postgresql://postgresql:5432/jhipsterSampleApplication -e SPRING_DATASOURCE_USERNAME=jhipsterSampleApplication -e SPRING_DATASOURCE_PASSWORD=password jhipster-app:latest
 
 
-this is to test if commits will now automatically trigger builds  ssss
+this is to test if commits will now automatically trigger builds
